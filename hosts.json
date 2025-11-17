@@ -1,0 +1,11 @@
+{
+  "hosts": [
+    {
+      "name": "",
+      "ip": "",
+      "ssh_port": 22,
+      "ssh_user": "",
+      "ssh_password": ""
+    }
+  ]
+}
