@@ -1,10 +1,14 @@
 """
 Uptime history tracker using SQLite database
 """
+import logging
 import sqlite3
 import time
 from typing import List, Tuple
+
 from config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class UptimeTracker:
@@ -59,7 +63,7 @@ class UptimeTracker:
             ''', (hostname, hour_timestamp, 1 if status else 0))
             conn.commit()
         except sqlite3.Error as e:
-            print(f"Database error: {e}")
+            logger.error("Database error: %s", e)
         finally:
             conn.close()
 
@@ -115,6 +119,7 @@ class UptimeTracker:
         # Generate emoji string for the last 48 hours
         current_time = int(time.time())
         emoji_string = ""
+        unknown_emoji = "⬜"
 
         for i in range(hours):
             # Calculate timestamp for this hour (from oldest to newest)
@@ -126,8 +131,8 @@ class UptimeTracker:
                 status = history_dict[hour_timestamp]
                 emoji_string += "🟩" if status == 1 else "🟥"
             else:
-                # No data for this specific hour - treat as down
-                emoji_string += "🟥"
+                # No data for this specific hour - treat as unknown
+                emoji_string += unknown_emoji
 
         return emoji_string
 

@@ -4,6 +4,7 @@
 # Database
 uptime_history.db
 *.db
+message_ids.json
 
 # Python
 __pycache__/
@@ -31,8 +32,6 @@ id_rsa*
 
 # Logs
 *.log
-
-claude.md
-readme.md
-.DS_Store
-
+bot.pid
+start.sh
+stop.sh

@@ -1,15 +1,27 @@
 """
 SSH client for remote command execution
 """
-import paramiko
+import logging
 import os
 from typing import Optional, Tuple
+import paramiko
+
+logger = logging.getLogger(__name__)
 
 
 class SSHClient:
     """SSH client wrapper for executing remote commands"""
 
-    def __init__(self, hostname: str, port: int, username: str, key_path: str = None, password: str = None):
+    def __init__(
+        self,
+        hostname: str,
+        port: int,
+        username: str,
+        key_path: str = None,
+        password: str = None,
+        known_hosts_file: str = None,
+        strict_host_key_checking: bool = False
+    ):
         """
         Initialize SSH client
 
@@ -26,6 +38,9 @@ class SSHClient:
         self.key_path = os.path.expanduser(key_path) if key_path else None
         self.password = password
         self.client = None
+        self.known_hosts_file = os.path.expanduser(known_hosts_file) if known_hosts_file else None
+        self.strict_host_key_checking = strict_host_key_checking
+        self.last_error: Optional[str] = None
 
     def connect(self) -> bool:
         """
@@ -35,8 +50,17 @@ class SSHClient:
             True if connection successful, False otherwise
         """
         try:
+            self.last_error = None
             self.client = paramiko.SSHClient()
-            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            if self.known_hosts_file:
+                self.client.load_host_keys(self.known_hosts_file)
+            else:
+                self.client.load_system_host_keys()
+
+            if self.strict_host_key_checking:
+                self.client.set_missing_host_key_policy(paramiko.RejectPolicy())
+            else:
+                self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
             # Use key-based authentication if key_path is provided
             if self.key_path:
@@ -49,7 +73,8 @@ class SSHClient:
                     try:
                         private_key = paramiko.Ed25519Key.from_private_key_file(self.key_path)
                     except:
-                        print(f"Failed to load SSH key from {self.key_path}")
+                        logger.error("Failed to load SSH key from %s", self.key_path)
+                        self.last_error = f"Failed to load SSH key from {self.key_path}"
                         return False
 
                 self.client.connect(
@@ -71,19 +96,23 @@ class SSHClient:
                     banner_timeout=10
                 )
             else:
-                print("No authentication method provided (key_path or password)")
+                logger.error("No authentication method provided (key_path or password)")
+                self.last_error = "No authentication method provided (key_path or password)"
                 return False
 
             return True
 
         except paramiko.AuthenticationException:
-            print(f"Authentication failed for {self.username}@{self.hostname}")
+            logger.error("Authentication failed for %s@%s", self.username, self.hostname)
+            self.last_error = "Authentication failed"
             return False
         except paramiko.SSHException as e:
-            print(f"SSH error connecting to {self.hostname}: {e}")
+            logger.error("SSH error connecting to %s: %s", self.hostname, e)
+            self.last_error = str(e)
             return False
         except Exception as e:
-            print(f"Error connecting to {self.hostname}: {e}")
+            logger.error("Error connecting to %s: %s", self.hostname, e)
+            self.last_error = str(e)
             return False
 
     def execute_command(self, command: str) -> Tuple[bool, str]:
@@ -97,19 +126,24 @@ class SSHClient:
             Tuple of (success: bool, output: str)
         """
         if not self.client:
+            self.last_error = "Not connected"
             return False, "Not connected"
 
         try:
             stdin, stdout, stderr = self.client.exec_command(command, timeout=10)
+            exit_status = stdout.channel.recv_exit_status()
             output = stdout.read().decode('utf-8').strip()
             error = stderr.read().decode('utf-8').strip()
 
-            if error:
-                return False, error
+            if exit_status != 0:
+                self.last_error = error or output or f"Exit status {exit_status}"
+                return False, error or output or f"Exit status {exit_status}"
 
-            return True, output
+            self.last_error = None
+            return True, output if output else error
 
         except Exception as e:
+            self.last_error = str(e)
             return False, str(e)
 
     def close(self):

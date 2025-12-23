@@ -1,11 +1,32 @@
 {
   "hosts": [
-    {
-      "name": "",
-      "ip": "",
+     {
+      "name": "lo-minipc",
+      "ip": "localhost",
       "ssh_port": 22,
-      "ssh_user": "",
-      "ssh_password": ""
+      "ssh_user": "harumaki4185",
+      "ssh_password": "snoopy4946"
+    },
+    {
+      "name": "liberal-online",
+      "ip": "100.69.2.114",
+      "ssh_port": 22,
+      "ssh_user": "harumaki4185",
+      "ssh_password": "snoopy4946"
+    },
+    {
+      "name": "t530",
+      "ip": "100.106.29.31",
+      "ssh_port": 22,
+      "ssh_user": "harumaki4185",
+      "ssh_password": "snoopy4946"
+    },
+    {
+      "name": "pve",
+      "ip": "100.124.198.25",
+      "ssh_port": 22,
+      "ssh_user": "root",
+      "ssh_password": "snoopy4946"
     }
   ]
 }

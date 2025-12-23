@@ -1,12 +1,18 @@
 """
 System monitoring module for gathering server information via SSH
 """
-from typing import Dict, Optional
-from ssh_client import SSHClient
-import psutil
+import logging
 import platform
-import subprocess
 import socket
+import subprocess
+from typing import Dict, Optional
+
+import psutil
+
+from config import Config
+from ssh_client import SSHClient
+
+logger = logging.getLogger(__name__)
 
 
 class ServerMonitor:
@@ -25,6 +31,7 @@ class ServerMonitor:
         self.username = host_config['ssh_user']
         self.key_path = host_config.get('ssh_key_path')
         self.password = host_config.get('ssh_password')
+        self.last_error: Optional[str] = None
 
     def get_system_info(self) -> Optional[Dict]:
         """
@@ -33,9 +40,18 @@ class ServerMonitor:
         Returns:
             Dictionary with system info, or None if connection failed
         """
-        ssh = SSHClient(self.ip, self.port, self.username, self.key_path, self.password)
+        ssh = SSHClient(
+            self.ip,
+            self.port,
+            self.username,
+            self.key_path,
+            self.password,
+            known_hosts_file=Config.KNOWN_HOSTS_FILE,
+            strict_host_key_checking=Config.STRICT_HOST_KEY_CHECKING
+        )
 
         if not ssh.connect():
+            self.last_error = ssh.last_error
             return None
 
         try:
@@ -52,6 +68,7 @@ class ServerMonitor:
                 'load_average': self._get_load_average(ssh),
                 'online': True
             }
+            self.last_error = None
             return info
 
         finally:
@@ -69,7 +86,22 @@ class ServerMonitor:
     def _get_cpu_usage(self, ssh: SSHClient) -> str:
         """Get CPU usage percentage"""
         success, output = ssh.execute_command(
-            "top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | cut -d '%' -f 1"
+            "sh -c \"read cpu user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat; "
+            "total1=$((user+nice+system+idle+iowait+irq+softirq+steal)); idle1=$((idle+iowait)); "
+            "sleep 0.1; "
+            "read cpu user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat; "
+            "total2=$((user+nice+system+idle+iowait+irq+softirq+steal)); idle2=$((idle+iowait)); "
+            "dt=$((total2-total1)); di=$((idle2-idle1)); "
+            "if [ $dt -gt 0 ]; then echo $((100*(dt-di)/dt)); else echo 0; fi\""
+        )
+        if success and output:
+            try:
+                usage = float(output.strip())
+                return f"{usage:.1f}%"
+            except ValueError:
+                pass
+        success, output = ssh.execute_command(
+            "LANG=C top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | cut -d '%' -f 1"
         )
         if success and output:
             try:
@@ -143,8 +175,17 @@ class ServerMonitor:
         Returns:
             True if host is reachable, False otherwise
         """
-        ssh = SSHClient(self.ip, self.port, self.username, self.key_path, self.password)
+        ssh = SSHClient(
+            self.ip,
+            self.port,
+            self.username,
+            self.key_path,
+            self.password,
+            known_hosts_file=Config.KNOWN_HOSTS_FILE,
+            strict_host_key_checking=Config.STRICT_HOST_KEY_CHECKING
+        )
         result = ssh.connect()
+        self.last_error = None if result else ssh.last_error
         ssh.close()
         return result
 
@@ -152,17 +193,42 @@ class ServerMonitor:
 class LocalMonitor:
     """Collects system information from the local machine using psutil"""
 
-    def __init__(self):
+    def __init__(self, name_override: Optional[str] = None):
         """Initialize local monitor"""
-        self.name = f"{platform.node()} (localhost)"
+        if name_override:
+            self.name = f"{name_override} (localhost)"
+        else:
+            self.name = f"{platform.node()} (localhost)"
+        self.ip = self._get_local_ip()
+        self.last_error: Optional[str] = None
+
+    def _get_local_ip(self) -> str:
+        """Pick a stable local IP (prefer Tailscale if available)."""
         try:
-            # Get local IP address
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            self.ip = s.getsockname()[0]
-            s.close()
-        except:
-            self.ip = "127.0.0.1"
+            addrs = psutil.net_if_addrs()
+            if Config.LOCAL_INTERFACE:
+                ip = self._get_interface_ipv4(addrs, Config.LOCAL_INTERFACE)
+                if ip:
+                    return ip
+            ip = self._get_interface_ipv4(addrs, "tailscale0")
+            if ip:
+                return ip
+            for iface, iface_addrs in addrs.items():
+                ip = self._get_interface_ipv4(addrs, iface)
+                if ip and not ip.startswith("127."):
+                    return ip
+        except Exception as e:
+            logger.warning("Failed to detect local IP: %s", e)
+        return "127.0.0.1"
+
+    def _get_interface_ipv4(self, addrs, iface_name: str) -> Optional[str]:
+        iface_addrs = addrs.get(iface_name)
+        if not iface_addrs:
+            return None
+        for addr in iface_addrs:
+            if addr.family == socket.AF_INET:
+                return addr.address
+        return None
 
     def get_system_info(self) -> Optional[Dict]:
         """
@@ -185,9 +251,11 @@ class LocalMonitor:
                 'load_average': self._get_load_average(),
                 'online': True
             }
+            self.last_error = None
             return info
         except Exception as e:
-            print(f"Error gathering local system info: {e}")
+            logger.error("Error gathering local system info: %s", e)
+            self.last_error = str(e)
             return None
 
     def _get_cpu_model(self) -> str:
@@ -213,7 +281,7 @@ class LocalMonitor:
     def _get_cpu_usage(self) -> str:
         """Get CPU usage percentage"""
         try:
-            usage = psutil.cpu_percent(interval=1)
+            usage = psutil.cpu_percent(interval=0.1)
             return f"{usage:.1f}%"
         except:
             return "N/A"
